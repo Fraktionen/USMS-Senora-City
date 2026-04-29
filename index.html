@@ -231,6 +231,7 @@
       <button id="navRejected" class="hidden" onclick="openAdminPage('rejected')">Abgelehnte Bewerbungen</button>
       <button id="navAccepted" class="hidden" onclick="openAdminPage('accepted')">Angenommene Bewerbungen</button>
       <button id="navSettings" class="hidden" onclick="openAdminPage('settings')">Einstellungen</button>
+      <button id="navLogs" class="hidden" onclick="openAdminPage('logs')">Logs</button>
       <button id="navLogout" class="hidden" onclick="logout()">Logout</button>
       <button class="btn-main" onclick="openForm()">Hier bewerben</button>
     </div>
@@ -308,6 +309,27 @@
         <div class="tab" id="tab-review"><input class="search" id="searchReview" oninput="renderLists()" placeholder="Suche in Bearbeitung..."><div class="list" id="reviewList"></div></div>
         <div class="tab" id="tab-accepted"><input class="search" id="searchAccepted" oninput="renderLists()" placeholder="Suche angenommene Bewerbungen..."><div class="list" id="acceptedList"></div></div>
         <div class="tab" id="tab-rejected"><input class="search" id="searchRejected" oninput="renderLists()" placeholder="Suche abgelehnte Bewerbungen..."><div class="list" id="rejectedList"></div></div>
+        <div class="tab" id="tab-logs">
+          <div class="cards" style="margin-bottom:18px">
+            <div class="card">
+              <h3>Logs filtern</h3>
+              <p class="muted">Hier sehen Owner und Personal, was im System gemacht wurde. Logs können nicht gelöscht werden.</p><br>
+              <div class="form-grid">
+                <div class="field">
+                  <label>Nach User filtern</label>
+                  <input id="logUserFilter" oninput="renderLogs()" placeholder="z. B. Usms01">
+                </div>
+                <div class="field">
+                  <label>Datum filtern</label>
+                  <input id="logDateFilter" onchange="renderLogs()" type="date">
+                </div>
+              </div><br>
+              <button class="btn" onclick="clearLogFilters()">Filter zurücksetzen</button>
+            </div>
+          </div>
+          <div class="list" id="logsList"></div>
+        </div>
+
         <div class="tab" id="tab-settings">
           <div class="cards">
             <div class="card">
@@ -490,7 +512,7 @@
 
     function updateNav(){
       const logged = !!currentUser;
-      ["navOpen","navReview","navRejected","navAccepted","navLogout"].forEach(id => document.getElementById(id).classList.toggle("hidden", !logged));
+      ["navOpen","navReview","navRejected","navAccepted","navLogs","navLogout"].forEach(id => document.getElementById(id).classList.toggle("hidden", !logged));
       document.getElementById("navSettings").classList.toggle("hidden", !(logged && currentUser.role === "owner"));
       document.getElementById("openCount").textContent = applications.filter(a => a.status === "open").length;
     }
@@ -547,10 +569,11 @@
       if(name === "settings" && currentUser.role !== "owner") name = "open";
       document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
       document.getElementById("tab-" + name).classList.add("active");
-      const titles = { open:"Offene Bewerbungen", review:"In Bearbeitung", accepted:"Angenommene Bewerbungen", rejected:"Abgelehnte Bewerbungen", settings:"Einstellungen" };
+      const titles = { open:"Offene Bewerbungen", review:"In Bearbeitung", accepted:"Angenommene Bewerbungen", rejected:"Abgelehnte Bewerbungen", settings:"Einstellungen", logs:"System Logs" };
       document.getElementById("adminTitle").textContent = titles[name] || "Admin";
       document.getElementById("whoami").textContent = `Eingeloggt als ${currentUser.username} (${currentUser.role === "owner" ? "Owner" : "Personal"})`;
       renderLists();
+      if(name === "logs") renderLogs();
     }
 
     document.getElementById("applicationForm").addEventListener("submit", async (e) => {
@@ -692,6 +715,7 @@
       if(!text || !selectedAppId) return;
       const msg = { from: currentUser.username, text, time: new Date().toLocaleString("de-DE") };
       await db.collection("applications").doc(selectedAppId).update({ messages: firebase.firestore.FieldValue.arrayUnion(msg) });
+      await addLog("Admin Nachricht gesendet", `Nachricht an Bewerbung ${selectedAppId}`);
       input.value = "";
       setTimeout(() => openDetail(selectedAppId), 300);
     }
@@ -727,6 +751,7 @@
         messages: firebase.firestore.FieldValue.arrayUnion(msg),
         unreadAdmin: firebase.firestore.FieldValue.increment(1)
       });
+      await addLog("Bewerber Nachricht", `Neue Nachricht bei Bewerbung ${id}`, "Bewerber");
       input.value = "";
       setTimeout(findMyApplication, 300);
     }
@@ -750,17 +775,20 @@
         decisionBy: by,
         reason: pendingDecision === "rejected" ? reason : ""
       });
+      await addLog("Bewerbung Status geändert", `${selectedAppId} wurde auf ${statusLabels[pendingDecision]} gesetzt. Von: ${by}${reason ? " · Grund: " + reason : ""}`);
       closeModal("decisionModal");
       closeModal("detailModal");
     }
 
     async function setPhase(open){
       await db.collection("settings").doc("main").set({ phaseOpen: open, webhook: settings.webhook || "" }, { merge: true });
+      await addLog("Bewerbungsphase geändert", open ? "Bewerbungsphase geöffnet" : "Bewerbungsphase geschlossen");
     }
 
     async function saveWebhook(){
       const webhook = document.getElementById("webhookInput").value.trim();
       await db.collection("settings").doc("main").set({ webhook }, { merge: true });
+      await addLog("Webhook gespeichert", "Webhook für Bewerbungen wurde geändert.");
       alert("Webhook gespeichert.");
     }
 
@@ -769,6 +797,7 @@
       const password = document.getElementById("newUserPass").value.trim();
       if(!username || !password){ alert("Benutzername und Passwort ausfüllen."); return; }
       await db.collection("users").doc(username).set({ username, password, role: "personal" });
+      await addLog("Personal hinzugefügt", `Account ${username} wurde erstellt.`);
       document.getElementById("newUserName").value = "";
       document.getElementById("newUserPass").value = "";
       renderUsers();
@@ -777,6 +806,7 @@
     async function deleteUser(username){
       if(username === currentUser.username){ alert("Du kannst dich nicht selbst löschen."); return; }
       await db.collection("users").doc(username).delete();
+      await addLog("Personal gelöscht", `Account ${username} wurde entfernt.`);
       renderUsers();
     }
 
@@ -791,6 +821,64 @@
           <button class="btn btn-red btn-small" onclick="deleteUser('${escAttr(u.username)}')">Löschen</button>
         </div>
       `).join("") : `<p class="muted">Keine Logins vorhanden.</p>`;
+    }
+
+    async function addLog(action, info, forcedBy){
+      try {
+        await db.collection("logs").add({
+          action,
+          info,
+          by: forcedBy || currentUser?.username || "System",
+          date: new Date().toISOString().slice(0, 10),
+          time: new Date().toLocaleString("de-DE"),
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } catch(err){
+        console.warn("Log konnte nicht gespeichert werden", err);
+      }
+    }
+
+    async function renderLogs(){
+      const el = document.getElementById("logsList");
+      if(!el || !currentUser) return;
+
+      const userFilter = (document.getElementById("logUserFilter")?.value || "").trim().toLowerCase();
+      const dateFilter = document.getElementById("logDateFilter")?.value || "";
+
+      el.innerHTML = `<p class="muted">Logs werden geladen...</p>`;
+
+      try {
+        const snap = await db.collection("logs").orderBy("createdAt", "desc").limit(150).get();
+        let logs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        if(userFilter){
+          logs = logs.filter(log => String(log.by || "").toLowerCase().includes(userFilter));
+        }
+
+        if(dateFilter){
+          logs = logs.filter(log => log.date === dateFilter);
+        }
+
+        el.innerHTML = logs.length ? logs.map(log => `
+          <div class="row">
+            <div>
+              <strong>${esc(log.action || "Log")}</strong>
+              <span class="muted">${esc(log.time || "")} · ${esc(log.by || "System")}</span><br>
+              <span>${esc(log.info || "-")}</span>
+            </div>
+            <div class="muted">Geschützt</div>
+          </div>
+        `).join("") : `<p class="muted">Keine Logs gefunden.</p>`;
+      } catch(err){
+        console.error(err);
+        el.innerHTML = `<p class="muted">Logs konnten nicht geladen werden. Prüfe deine Firestore-Regeln für die Collection logs.</p>`;
+      }
+    }
+
+    function clearLogFilters(){
+      document.getElementById("logUserFilter").value = "";
+      document.getElementById("logDateFilter").value = "";
+      renderLogs();
     }
 
     function esc(value){ return String(value ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
