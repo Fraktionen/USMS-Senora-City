@@ -340,9 +340,10 @@
             </div>
             <div class="card">
               <h3>Personal hinzufügen</h3>
-              <div class="field"><label>Benutzername</label><input id="newUserName" placeholder="z. B. USMS02"></div><br>
-              <div class="field"><label>Passwort</label><input id="newUserPass" placeholder="Passwort"></div><br>
-              <button class="btn btn-main" onclick="addPersonal()">Hinzufügen</button>
+              <p class="muted">Sicherer Weg: Erstelle Personal in Firebase Authentication und trage danach die UID hier ein.</p><br>
+              <div class="field"><label>Firebase UID</label><input id="newUserUid" placeholder="UID aus Firebase Authentication"></div><br>
+              <div class="field"><label>Anzeigename</label><input id="newUserName" placeholder="z. B. USMS02"></div><br>
+              <button class="btn btn-main" onclick="addPersonal()">Rolle speichern</button>
             </div>
             <div class="card">
               <h3>Webhook</h3>
@@ -362,7 +363,7 @@
     <div class="panel small">
       <div class="panel-header"><div><h2>Admin Login</h2><p class="muted">Owner oder Personalabteilung</p></div><button class="close" onclick="closeModal('loginModal')">×</button></div>
       <form id="loginForm">
-        <div class="field"><label>Benutzername</label><input id="loginUser" required></div>
+        <div class="field"><label>E-Mail</label><input id="loginUser" type="email" required placeholder="owner@usms.de"></div>
         <div class="field"><label>Passwort</label><input id="loginPass" type="password" required></div>
         <button class="btn btn-main" type="submit">Einloggen</button>
         <p class="muted" id="loginError"></p>
@@ -439,6 +440,7 @@
 
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 
   <script>
     const firebaseConfig = {
@@ -452,8 +454,10 @@
 
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
+    const auth = firebase.auth();
 
-    let currentUser = JSON.parse(localStorage.getItem("usmsCurrentUser") || "null");
+    let currentUser = null;
+    let unsubscribeApplications = null;
     let settings = { phaseOpen: true, webhook: "" };
     let applications = [];
     let selectedAppId = null;
@@ -473,10 +477,17 @@
     function openForm(){ if(!settings.phaseOpen){ alert("Die Bewerbungsphase ist aktuell geschlossen."); return; } openModal("applicationModal"); }
     function openInfo(title, text){ document.getElementById("infoTitle").textContent = title; document.getElementById("infoText").textContent = text; openModal("infoModal"); }
 
-    function saveCurrentUser(){
-      if(currentUser) localStorage.setItem("usmsCurrentUser", JSON.stringify(currentUser));
-      else localStorage.removeItem("usmsCurrentUser");
+    function setCurrentUser(userData){
+      currentUser = userData;
       updateNav();
+      if(currentUser){
+        listenApplications();
+      } else {
+        if(unsubscribeApplications) unsubscribeApplications();
+        applications = [];
+        updateNav();
+        renderLists();
+      }
     }
 
     async function loadSettings(){
@@ -494,7 +505,9 @@
     }
 
     function listenApplications(){
-      db.collection("applications").orderBy("createdAt", "desc").onSnapshot(snapshot => {
+      if(unsubscribeApplications) unsubscribeApplications();
+      if(!currentUser) return;
+      unsubscribeApplications = db.collection("applications").orderBy("createdAt", "desc").onSnapshot(snapshot => {
         applications = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         updateNav();
         renderLists();
@@ -519,37 +532,56 @@
 
     document.getElementById("loginForm").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const username = document.getElementById("loginUser").value.trim();
+      const email = document.getElementById("loginUser").value.trim();
       const password = document.getElementById("loginPass").value.trim();
       const error = document.getElementById("loginError");
       error.textContent = "Prüfe Login...";
 
       try {
-        const snap = await db.collection("users")
-          .where("username", "==", username)
-          .where("password", "==", password)
-          .limit(1)
-          .get();
+        await auth.signInWithEmailAndPassword(email, password);
+        closeModal("loginModal");
+      } catch(err){
+        console.error(err);
+        error.textContent = "Login falsch oder User existiert nicht.";
+      }
+    });
 
-        if(snap.empty){
-          error.textContent = "Login falsch.";
+    auth.onAuthStateChanged(async (firebaseUser) => {
+      if(!firebaseUser){
+        setCurrentUser(null);
+        return;
+      }
+
+      try {
+        const userDoc = await db.collection("users").doc(firebaseUser.uid).get();
+        if(!userDoc.exists){
+          alert("Dieser Account hat keine Admin-Rechte.");
+          await auth.signOut();
           return;
         }
 
-        const user = snap.docs[0].data();
-        currentUser = { username: user.username, role: user.role };
-        saveCurrentUser();
-        closeModal("loginModal");
-        openAdminPage("open");
+        const data = userDoc.data();
+        if(data.role !== "owner" && data.role !== "personal"){
+          alert("Dieser Account hat keine gültige Rolle.");
+          await auth.signOut();
+          return;
+        }
+
+        setCurrentUser({
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+          username: data.username || firebaseUser.email,
+          role: data.role
+        });
       } catch(err){
-        error.textContent = "Firebase Fehler. Prüfe deine Firestore-Regeln.";
         console.error(err);
+        alert("Admin-Rechte konnten nicht geprüft werden. Prüfe Firestore-Regeln.");
+        await auth.signOut();
       }
     });
 
     function logout(){
-      currentUser = null;
-      saveCurrentUser();
+      auth.signOut();
       closeAdminPage();
     }
 
@@ -793,18 +825,19 @@
     }
 
     async function addPersonal(){
+      if(!currentUser || currentUser.role !== "owner") return alert("Nur Owner dürfen Personal hinzufügen.");
+      const uid = document.getElementById("newUserUid").value.trim();
       const username = document.getElementById("newUserName").value.trim();
-      const password = document.getElementById("newUserPass").value.trim();
-      if(!username || !password){ alert("Benutzername und Passwort ausfüllen."); return; }
-      await db.collection("users").doc(username).set({ username, password, role: "personal" });
-      await addLog("Personal hinzugefügt", `Account ${username} wurde erstellt.`);
+      if(!uid || !username){ alert("UID und Anzeigename ausfüllen."); return; }
+      await db.collection("users").doc(uid).set({ username, role: "personal" });
+      await addLog("Personal hinzugefügt", `Account ${username} wurde als Personal eingetragen.`);
+      document.getElementById("newUserUid").value = "";
       document.getElementById("newUserName").value = "";
-      document.getElementById("newUserPass").value = "";
       renderUsers();
     }
 
     async function deleteUser(username){
-      if(username === currentUser.username){ alert("Du kannst dich nicht selbst löschen."); return; }
+      if(username === currentUser.uid){ alert("Du kannst dich nicht selbst löschen."); return; }
       await db.collection("users").doc(username).delete();
       await addLog("Personal gelöscht", `Account ${username} wurde entfernt.`);
       renderUsers();
@@ -814,11 +847,11 @@
       const el = document.getElementById("usersList");
       if(!el || !currentUser || currentUser.role !== "owner") return;
       const snap = await db.collection("users").get();
-      const users = snap.docs.map(d => d.data());
+      const users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       el.innerHTML = users.length ? users.map(u => `
         <div class="row">
           <div><strong>${esc(u.username)}</strong><span class="muted">${esc(u.role)}</span></div>
-          <button class="btn btn-red btn-small" onclick="deleteUser('${escAttr(u.username)}')">Löschen</button>
+          <button class="btn btn-red btn-small" onclick="deleteUser('${escAttr(u.id || u.username)}')">Rolle entfernen</button>
         </div>
       `).join("") : `<p class="muted">Keine Logins vorhanden.</p>`;
     }
@@ -885,7 +918,6 @@
     function escAttr(value){ return esc(value).replace(/`/g, "&#96;"); }
 
     loadSettings();
-    listenApplications();
     updateNav();
   </script>
 </body>
