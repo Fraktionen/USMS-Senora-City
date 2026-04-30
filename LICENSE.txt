@@ -1,0 +1,47 @@
+Senora City SCSD / USMS System
+Copyright (c) 2026 Hamster (Mete Blunt)
+
+==============================
+DEUTSCH
+==============================
+
+Alle Rechte vorbehalten.
+
+Dieses Projekt (inklusive Code, Design, Struktur und Funktionen)
+ist Eigentum von Hamster (Mete Blunt).
+
+Es ist ausdrücklich NICHT erlaubt:
+- den Code zu kopieren
+- den Code zu verändern
+- den Code weiterzugeben
+- das System neu zu veröffentlichen
+- Teile dieses Projekts in anderen Projekten zu verwenden
+
+Die Nutzung dieses Systems ist ausschließlich für Senora City gestattet.
+
+Jegliche unerlaubte Nutzung kann rechtliche Konsequenzen nach sich ziehen.
+
+Dieses Projekt wird ohne jegliche Garantie bereitgestellt.
+
+
+==============================
+ENGLISH
+==============================
+
+All rights reserved.
+
+This project (including code, design, structure, and functionality)
+is the property of Hamster (Mete Blunt).
+
+It is strictly NOT allowed to:
+- copy the code
+- modify the code
+- distribute the code
+- republish the system
+- use parts of this project in other projects
+
+This system is only permitted to be used for Senora City.
+
+Any unauthorized use may result in legal consequences.
+
+This project is provided without any warranty.
